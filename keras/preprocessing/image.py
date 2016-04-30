@@ -194,6 +194,9 @@ class ImageDataGenerator(object):
         vertical_flip: whether to randomly flip images vertically.
         dim_ordering: 'th' or 'tf'. In 'th' mode, the channels dimension
             (the depth) is at index 1, in 'tf' mode it is at index 3.
+        generate_y: A boolean to flag to perform the same augmentation for y as X.
+            The augmentation includes: rotation_range width_shift_range,height_shift_range,
+            shear_range,zoom_range). Default is False.
     '''
     def __init__(self,
                  featurewise_center=False,
@@ -211,7 +214,8 @@ class ImageDataGenerator(object):
                  cval=0.,
                  horizontal_flip=False,
                  vertical_flip=False,
-                 dim_ordering='th'):
+                 dim_ordering='th',
+                 generate_y=False,):
         self.__dict__.update(locals())
         self.mean = None
         self.std = None
@@ -268,13 +272,16 @@ class ImageDataGenerator(object):
                    current_index, current_batch_size)
 
     def flow(self, X, y, batch_size=32, shuffle=False, seed=None,
-             save_to_dir=None, save_prefix='', save_format='jpeg'):
+             save_to_dir=None, save_prefix='', save_format='jpeg',save_y_postfix='y'):
         assert len(X) == len(y)
+        if transform_y:
+            assert X.shape == y.shape
         self.X = X
         self.y = y
         self.save_to_dir = save_to_dir
         self.save_prefix = save_prefix
         self.save_format = save_format
+        self.save_y_postfix = save_y_postfix
         self.reset()
         self.flow_generator = self._flow_index(X.shape[0], batch_size,
                                                shuffle, seed)
@@ -294,11 +301,18 @@ class ImageDataGenerator(object):
             index_array, current_index, current_batch_size = next(self.flow_generator)
         # The transformation of images is not under thread lock so it can be done in parallel
         bX = np.zeros(tuple([current_batch_size] + list(self.X.shape)[1:]))
+        if self.generate_y:
+            by = np.zeros(tuple([current_batch_size] + list(self.X.shape)[1:]))
         for i, j in enumerate(index_array):
             x = self.X[j]
-            x = self.random_transform(x.astype('float32'))
-            x = self.standardize(x)
-            bX[i] = x
+            if self.generate_y:
+                x, y = self.random_transform(x.astype('float32'),y=y.astype('float32'))            
+            else:
+                x = self.random_transform(x.astype('float32'))
+            x = self.standardize(x)            
+            bX[i] = x            
+            if self.generate_y:
+                bY[i] = y
         if self.save_to_dir:
             for i in range(current_batch_size):
                 img = array_to_img(bX[i], self.dim_ordering, scale=True)
@@ -306,7 +320,16 @@ class ImageDataGenerator(object):
                                                            index=current_index + i,
                                                            format=self.save_format)
                 img.save(os.path.join(self.save_to_dir, fname))
-        bY = self.y[index_array]
+                if self.generate_y:
+                    img = array_to_img(bX[i], self.dim_ordering, scale=True)
+                    fname = '{prefix}_{index}_{y_postfix}.{format}'.format(prefix=self.save_prefix,
+                                                               y_postfix=self.save_y_postfix,
+                                                               index=current_index + i,
+                                                               format=self.save_format)
+                    img.save(os.path.join(self.save_to_dir, fname))
+                
+        if self.generate_y is False:
+            bY = self.y[index_array]
         return bX, bY
 
     def __next__(self):
@@ -333,7 +356,7 @@ class ImageDataGenerator(object):
 
         return x
 
-    def random_transform(self, x):
+    def random_transform(self, x,y=None):
         # x is a single image, so it doesn't have image number at index 0
         img_row_index = self.row_index - 1
         img_col_index = self.col_index - 1
@@ -382,21 +405,33 @@ class ImageDataGenerator(object):
         transform_matrix = transform_matrix_offset_center(transform_matrix, h, w)
         x = apply_transform(x, transform_matrix, img_channel_index,
                             fill_mode=self.fill_mode, cval=self.cval)
+                            
+        if y:
+            y = apply_transform(y, transform_matrix, img_channel_index,
+                            fill_mode=self.fill_mode, cval=self.cval)
+                            
         if self.channel_shift_range != 0:
             x = random_channel_shift(x, self.channel_shift_range, img_channel_index)
 
         if self.horizontal_flip:
             if np.random.random() < 0.5:
                 x = flip_axis(x, img_col_index)
+                if y:
+                    y = flip_axis(y, img_col_index)
 
         if self.vertical_flip:
             if np.random.random() < 0.5:
                 x = flip_axis(x, img_row_index)
+                if y:
+                    y = flip_axis(y, img_row_index)
 
         # TODO:
         # channel-wise normalization
         # barrel/fisheye
-        return x
+        if y:
+            return x, y
+        else:
+            return x
 
     def fit(self, X,
             augment=False,
