@@ -214,8 +214,7 @@ class ImageDataGenerator(object):
                  cval=0.,
                  horizontal_flip=False,
                  vertical_flip=False,
-                 dim_ordering='th',
-                 generate_y=False,):
+                 dim_ordering='th'):
         self.__dict__.update(locals())
         self.mean = None
         self.std = None
@@ -272,16 +271,18 @@ class ImageDataGenerator(object):
                    current_index, current_batch_size)
 
     def flow(self, X, y, batch_size=32, shuffle=False, seed=None,
-             save_to_dir=None, save_prefix='', save_format='jpeg',save_y_postfix='y'):
+             save_to_dir=None, save_prefix='', save_format='jpeg',
+             generate_y=False, save_y_postfix='y'):
         assert len(X) == len(y)
-        if transform_y:
-            assert X.shape == y.shape
         self.X = X
         self.y = y
         self.save_to_dir = save_to_dir
         self.save_prefix = save_prefix
         self.save_format = save_format
         self.save_y_postfix = save_y_postfix
+        self.generate_y = generate_y
+        if self.generate_y:
+            assert X.shape == y.shape        
         self.reset()
         self.flow_generator = self._flow_index(X.shape[0], batch_size,
                                                shuffle, seed)
@@ -302,9 +303,10 @@ class ImageDataGenerator(object):
         # The transformation of images is not under thread lock so it can be done in parallel
         bX = np.zeros(tuple([current_batch_size] + list(self.X.shape)[1:]))
         if self.generate_y:
-            by = np.zeros(tuple([current_batch_size] + list(self.X.shape)[1:]))
+            by = np.zeros(tuple([current_batch_size] + list(self.y.shape)[1:]))
         for i, j in enumerate(index_array):
             x = self.X[j]
+            y = self.y[j]
             if self.generate_y:
                 x, y = self.random_transform(x.astype('float32'),y=y.astype('float32'))            
             else:
@@ -312,7 +314,7 @@ class ImageDataGenerator(object):
             x = self.standardize(x)            
             bX[i] = x            
             if self.generate_y:
-                bY[i] = y
+                by[i] = y
         if self.save_to_dir:
             for i in range(current_batch_size):
                 img = array_to_img(bX[i], self.dim_ordering, scale=True)
@@ -321,7 +323,7 @@ class ImageDataGenerator(object):
                                                            format=self.save_format)
                 img.save(os.path.join(self.save_to_dir, fname))
                 if self.generate_y:
-                    img = array_to_img(bX[i], self.dim_ordering, scale=True)
+                    img = array_to_img(by[i], self.dim_ordering, scale=True)
                     fname = '{prefix}_{index}_{y_postfix}.{format}'.format(prefix=self.save_prefix,
                                                                y_postfix=self.save_y_postfix,
                                                                index=current_index + i,
@@ -329,8 +331,8 @@ class ImageDataGenerator(object):
                     img.save(os.path.join(self.save_to_dir, fname))
                 
         if self.generate_y is False:
-            bY = self.y[index_array]
-        return bX, bY
+            by = self.y[index_array]
+        return bX, by
 
     def __next__(self):
         # for python 3.x.
@@ -406,7 +408,7 @@ class ImageDataGenerator(object):
         x = apply_transform(x, transform_matrix, img_channel_index,
                             fill_mode=self.fill_mode, cval=self.cval)
                             
-        if y:
+        if self.generate_y:
             y = apply_transform(y, transform_matrix, img_channel_index,
                             fill_mode=self.fill_mode, cval=self.cval)
                             
@@ -416,19 +418,19 @@ class ImageDataGenerator(object):
         if self.horizontal_flip:
             if np.random.random() < 0.5:
                 x = flip_axis(x, img_col_index)
-                if y:
+                if self.generate_y:
                     y = flip_axis(y, img_col_index)
 
         if self.vertical_flip:
             if np.random.random() < 0.5:
                 x = flip_axis(x, img_row_index)
-                if y:
+                if self.generate_y:
                     y = flip_axis(y, img_row_index)
 
         # TODO:
         # channel-wise normalization
         # barrel/fisheye
-        if y:
+        if self.generate_y:
             return x, y
         else:
             return x
